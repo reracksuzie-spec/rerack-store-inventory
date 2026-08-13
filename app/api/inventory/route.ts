@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
 const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
@@ -39,14 +39,46 @@ async function getAccessToken() {
   return data.access_token;
 }
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const token = await getAccessToken();
 
+    const query = `
+      query {
+        locations(first: 20) {
+          nodes {
+            id
+            name
+            isActive
+          }
+        }
+      }
+    `;
+
+    const response = await fetch(
+      `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2026-07/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopify-Access-Token": token,
+        },
+        body: JSON.stringify({ query }),
+        cache: "no-store",
+      }
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Shopify GraphQL request failed: ${text}`);
+    }
+
+    const data = await response.json();
+
     return NextResponse.json({
       success: true,
-      message: "Connected to Shopify",
-      tokenReceived: Boolean(token),
+      locations: data.data?.locations?.nodes ?? [],
+      errors: data.errors ?? null,
     });
   } catch (error) {
     console.error(error);
