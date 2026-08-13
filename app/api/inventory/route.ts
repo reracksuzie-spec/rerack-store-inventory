@@ -1,8 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
+
+const LOCATION_NAMES = {
+  warehouse: "E-Commerce/Warehouse",
+  portland: "Portland Retail Store - Pick Up",
+  scappoose: "ReRack Outpost @ Paddle Shack Scappoose Bay",
+};
 
 async function getAccessToken() {
   if (
@@ -39,17 +45,57 @@ async function getAccessToken() {
   return data.access_token;
 }
 
-export async function GET() {
+function getStockStatus(quantity: number) {
+  if (quantity <= 0) {
+    return "out_of_stock";
+  }
+
+  if (quantity < 4) {
+    return "low_stock";
+  }
+
+  return "in_stock";
+}
+
+export async function GET(request: NextRequest) {
   try {
+    const variantId = request.nextUrl.searchParams.get("variant_id");
+
+    if (!variantId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Missing variant_id",
+        },
+        { status: 400 }
+      );
+    }
+
     const token = await getAccessToken();
 
+    const gid = variantId.startsWith("gid://shopify/ProductVariant/")
+      ? variantId
+      : `gid://shopify/ProductVariant/${variantId}`;
+
     const query = `
-      query {
-        locations(first: 20) {
-          nodes {
-            id
-            name
-            isActive
+      query VariantInventory($id: ID!) {
+        productVariant(id: $id) {
+          id
+          sku
+          title
+          inventoryItem {
+            inventoryLevels(first: 50) {
+              nodes {
+                location {
+                  id
+                  name
+                }
+                quantities(names: ["available"]) {
+                  name
+                  quantity
+                }
+              }
+            }
           }
         }
       }
@@ -63,7 +109,12 @@ export async function GET() {
           "Content-Type": "application/json",
           "X-Shopify-Access-Token": token,
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({
+          query,
+          variables: {
+            id: gid,
+          },
+        }),
         cache: "no-store",
       }
     );
@@ -75,10 +126,69 @@ export async function GET() {
 
     const data = await response.json();
 
+    if (data.errors) {
+      return NextResponse.json(
+        {
+          success: false,
+          errors: data.errors,
+        },
+        { status: 500 }
+      );
+    }
+
+    const variant = data.data?.productVariant;
+
+    if (!variant) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Variant not found",
+        },
+        { status: 404 }
+      );
+    }
+
+    const inventoryLevels =
+      variant.inventoryItem?.inventoryLevels?.nodes ?? [];
+
+    function findLocationInventory(locationName: string) {
+      const level = inventoryLevels.find(
+        (item: any) => item.location?.name === locationName
+      );
+
+      const availableQuantity =
+        level?.quantities?.find(
+          (item: any) => item.name === "available"
+        )?.quantity ?? 0;
+
+      return {
+        location: locationName,
+        quantity: availableQuantity,
+        status: getStockStatus(availableQuantity),
+      };
+    }
+
+    const warehouse = findLocationInventory(
+      LOCATION_NAMES.warehouse
+    );
+
+    const portland = findLocationInventory(
+      LOCATION_NAMES.portland
+    );
+
+    const scappoose = findLocationInventory(
+      LOCATION_NAMES.scappoose
+    );
+
     return NextResponse.json({
       success: true,
-      locations: data.data?.locations?.nodes ?? [],
-      errors: data.errors ?? null,
+      variant: {
+        id: variant.id,
+        sku: variant.sku,
+        title: variant.title,
+      },
+      shipping: warehouse,
+      pickup: [portland, scappoose],
     });
   } catch (error) {
     console.error(error);
@@ -86,7 +196,10 @@ export async function GET() {
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unknown error",
       },
       { status: 500 }
     );
