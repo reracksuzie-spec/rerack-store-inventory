@@ -216,47 +216,55 @@ export async function GET(request: NextRequest) {
       variant.inventoryItem?.inventoryLevels?.nodes ?? [];
 
     function findLocationInventory(locationName: string) {
-      const level = inventoryLevels.find(
-        (item: any) => item.location?.name === locationName
-      );
+  const level = inventoryLevels.find(
+    (item: any) => item.location?.name === locationName
+  );
 
-      const quantity = getAvailableQuantity(level);
+  if (!level) {
+    return null;
+  }
 
-      return {
-        location: locationName,
-        quantity,
-        status: getStockStatus(quantity),
-      };
-    }
+  const quantity = getAvailableQuantity(level);
 
-    const warehouse = findLocationInventory(
-      LOCATION_NAMES.warehouse
-    );
+  return {
+    location: locationName,
+    quantity,
+    status: getStockStatus(quantity),
+  };
+}
 
-    const portland = findLocationInventory(
-      LOCATION_NAMES.portland
-    );
+   const warehouse = findLocationInventory(
+  LOCATION_NAMES.warehouse
+);
 
-    const scappoose = findLocationInventory(
-      LOCATION_NAMES.scappoose
-    );
+const portland = findLocationInventory(
+  LOCATION_NAMES.portland
+);
 
-    return NextResponse.json({
-      success: true,
-      product: productId
-        ? {
-            id: data.data?.product?.id ?? null,
-            title: data.data?.product?.title ?? null,
-          }
-        : null,
-      variant: {
-        id: variant.id,
-        sku: variant.sku,
-        title: variant.title,
-      },
-      shipping: warehouse,
-      pickup: [portland, scappoose],
-    });
+const scappoose = findLocationInventory(
+  LOCATION_NAMES.scappoose
+);
+
+const pickupLocations = [portland, scappoose].filter(
+  (location) => location !== null
+);
+
+return NextResponse.json({
+  success: true,
+  product: productId
+    ? {
+        id: data.data?.product?.id ?? null,
+        title: data.data?.product?.title ?? null,
+      }
+    : null,
+  variant: {
+    id: variant.id,
+    sku: variant.sku,
+    title: variant.title,
+  },
+  shipping: warehouse,
+  pickup: pickupLocations,
+});
   } catch (error) {
     console.error(error);
 
