@@ -57,15 +57,24 @@ function getStockStatus(quantity: number) {
   return "in_stock";
 }
 
+function getAvailableQuantity(level: any) {
+  return (
+    level?.quantities?.find(
+      (item: any) => item.name === "available"
+    )?.quantity ?? 0
+  );
+}
+
 export async function GET(request: NextRequest) {
   try {
+    const productId = request.nextUrl.searchParams.get("product_id");
     const variantId = request.nextUrl.searchParams.get("variant_id");
 
-    if (!variantId) {
+    if (!productId && !variantId) {
       return NextResponse.json(
         {
           success: false,
-          error: "Missing variant_id",
+          error: "Missing product_id or variant_id",
         },
         { status: 400 }
       );
@@ -73,33 +82,84 @@ export async function GET(request: NextRequest) {
 
     const token = await getAccessToken();
 
-    const gid = variantId.startsWith("gid://shopify/ProductVariant/")
-      ? variantId
-      : `gid://shopify/ProductVariant/${variantId}`;
+    let query = "";
+    let variables: Record<string, string> = {};
 
-    const query = `
-      query VariantInventory($id: ID!) {
-        productVariant(id: $id) {
-          id
-          sku
-          title
-          inventoryItem {
-            inventoryLevels(first: 50) {
-              nodes {
-                location {
-                  id
-                  name
-                }
-                quantities(names: ["available"]) {
-                  name
-                  quantity
+    if (variantId) {
+      const variantGid = variantId.startsWith(
+        "gid://shopify/ProductVariant/"
+      )
+        ? variantId
+        : `gid://shopify/ProductVariant/${variantId}`;
+
+      query = `
+        query VariantInventory($id: ID!) {
+          productVariant(id: $id) {
+            id
+            sku
+            title
+            inventoryItem {
+              inventoryLevels(first: 50) {
+                nodes {
+                  location {
+                    id
+                    name
+                  }
+                  quantities(names: ["available"]) {
+                    name
+                    quantity
+                  }
                 }
               }
             }
           }
         }
-      }
-    `;
+      `;
+
+      variables = {
+        id: variantGid,
+      };
+    } else {
+      const productGid = productId!.startsWith(
+        "gid://shopify/Product/"
+      )
+        ? productId!
+        : `gid://shopify/Product/${productId}`;
+
+      query = `
+        query ProductInventory($id: ID!) {
+          product(id: $id) {
+            id
+            title
+            variants(first: 1) {
+              nodes {
+                id
+                sku
+                title
+                inventoryItem {
+                  inventoryLevels(first: 50) {
+                    nodes {
+                      location {
+                        id
+                        name
+                      }
+                      quantities(names: ["available"]) {
+                        name
+                        quantity
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      variables = {
+        id: productGid,
+      };
+    }
 
     const response = await fetch(
       `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2026-07/graphql.json`,
@@ -111,9 +171,7 @@ export async function GET(request: NextRequest) {
         },
         body: JSON.stringify({
           query,
-          variables: {
-            id: gid,
-          },
+          variables,
         }),
         cache: "no-store",
       }
@@ -136,13 +194,19 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const variant = data.data?.productVariant;
+    let variant;
+
+    if (variantId) {
+      variant = data.data?.productVariant;
+    } else {
+      variant = data.data?.product?.variants?.nodes?.[0];
+    }
 
     if (!variant) {
       return NextResponse.json(
         {
           success: false,
-          error: "Variant not found",
+          error: "Product variant not found",
         },
         { status: 404 }
       );
@@ -156,15 +220,12 @@ export async function GET(request: NextRequest) {
         (item: any) => item.location?.name === locationName
       );
 
-      const availableQuantity =
-        level?.quantities?.find(
-          (item: any) => item.name === "available"
-        )?.quantity ?? 0;
+      const quantity = getAvailableQuantity(level);
 
       return {
         location: locationName,
-        quantity: availableQuantity,
-        status: getStockStatus(availableQuantity),
+        quantity,
+        status: getStockStatus(quantity),
       };
     }
 
@@ -182,6 +243,12 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      product: productId
+        ? {
+            id: data.data?.product?.id ?? null,
+            title: data.data?.product?.title ?? null,
+          }
+        : null,
       variant: {
         id: variant.id,
         sku: variant.sku,
